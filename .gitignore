@@ -1,0 +1,15 @@
+# Ignorar archivos locales y configuraciones
+.DS_Store
+*.log
+
+# Backend
+backend/.env
+backend/venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# Frontend
+frontend/.env
+frontend/node_modules/
+frontend/dist/
+frontend/.shared

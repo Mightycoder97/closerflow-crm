@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #FAFAFA;
+    color: #0F172A;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+/* Custom styles for a clean, sober look */
+.sidebar-border {
+  border-color: #E5E7EB;
+}
+
+.chat-bubble-inbound {
+  background-color: #F3F4F6;
+  color: #1F2937;
+  border-radius: 12px 12px 12px 2px;
+}
+
+.chat-bubble-outbound {
+  background-color: #0F172A;
+  color: #FFFFFF;
+  border-radius: 12px 12px 2px 12px;
+}

@@ -8,9 +8,10 @@ from src.adapters.outbound.database.postgres import SessionLocal
 from src.adapters.outbound.database.models import ContactDBModel, MessageDBModel, UserDBModel
 from src.domain.entities.contact import ContactStatus
 
+import redis
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "meta_webhook_queue"
-
 async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_client: aioredis.Redis):
     try:
         entry = event_data.get("entry", [])[0]
@@ -98,7 +99,6 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_cli
 async def start_worker():
     print(f"Escuchando cola de Redis en {REDIS_URL}...")
     redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
-    
     while True:
         try:
             result = await redis_client.blpop(QUEUE_NAME, timeout=5)
@@ -112,7 +112,9 @@ async def start_worker():
                     await process_incoming_meta_webhook(event_data, db, redis_client)
                 finally:
                     db.close()
-                    
+        except (asyncio.TimeoutError, redis.exceptions.TimeoutError):
+            # Ignorar el timeout normal cuando la cola está vacía para no llenar logs
+            continue
         except Exception as e:
             print(f"Error de conexión o lectura en worker: {e}")
             await asyncio.sleep(2)

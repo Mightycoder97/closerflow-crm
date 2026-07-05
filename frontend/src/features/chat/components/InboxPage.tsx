@@ -4,17 +4,35 @@ import { wsClient } from '../../../services/webSocketClient';
 import { MessageSquare, User, Sparkles, Send, ShieldAlert, CheckCircle2, ChevronRight } from 'lucide-react';
 import { Contact, Message, AIAnalysis } from '../../../types';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+
 export const InboxPage: React.FC = () => {
   const { chats, activeChatId, messages, setChats, setActiveChatId, setMessages, updateChatStatus } = useChatStore();
   const [inputText, setInputText] = useState('');
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
   const [loadingAI, setLoadingAI] = useState(false);
 
-  // Mocks de contactos y mensajes para demostración si el backend local no está corriendo
-  useEffect(() => {
-    wsClient.connect();
-    
-    // Sembrar contactos semilla
+  // 1. Obtener los chats reales desde el backend al cargar la página
+  const fetchChats = async () => {
+    try {
+      const res = await fetch(`${API_URL}/chats`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          setChats(data);
+        } else {
+          loadDummyChats();
+        }
+      } else {
+        loadDummyChats();
+      }
+    } catch (e) {
+      console.warn("Falla de API, cargando datos de prueba:", e);
+      loadDummyChats();
+    }
+  };
+
+  const loadDummyChats = () => {
     const dummyChats: Contact[] = [
       {
         id: '1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p',
@@ -40,17 +58,45 @@ export const InboxPage: React.FC = () => {
       }
     ];
     setChats(dummyChats);
+  };
+
+  useEffect(() => {
+    wsClient.connect();
+    fetchChats();
     
     return () => {
       wsClient.disconnect();
     };
   }, [setChats]);
 
-  // Manejar el cambio de chat activo y sembrar mensajes semilla
-  const handleSelectChat = (chatId: string) => {
+  // Cada vez que llega un mensaje por WebSockets, actualizamos la lista
+  useEffect(() => {
+    // Si hay un mensaje nuevo del ws que modifica los chats, re-consultamos
+    // En producción se maneja de forma local, pero por simplicidad refrescamos la lista
+    const interval = setInterval(fetchChats, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 2. Obtener los mensajes del chat seleccionado desde el backend
+  const handleSelectChat = async (chatId: string) => {
     setActiveChatId(chatId);
-    setAiAnalysis(null); // Limpiar análisis al cambiar
+    setAiAnalysis(null); 
     
+    try {
+      const res = await fetch(`${API_URL}/chats/${chatId}/messages`);
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data);
+      } else {
+        loadDummyMessages(chatId);
+      }
+    } catch (e) {
+      console.warn("Falla de API, cargando mensajes de prueba:", e);
+      loadDummyMessages(chatId);
+    }
+  };
+
+  const loadDummyMessages = (chatId: string) => {
     const dummyMessages: Message[] = [
       {
         id: 'm1',
@@ -65,7 +111,7 @@ export const InboxPage: React.FC = () => {
         id: 'm2',
         contact_id: chatId,
         direction: 'OUTBOUND',
-        content: 'Hola Mateo! Sí, claro. Contamos con financiamiento interno de hasta 3 cuotas mensuales.',
+        content: 'Hola! Sí, claro. Contamos con financiamiento interno de hasta 3 cuotas mensuales.',
         message_type: 'TEXT',
         meta_message_id: 'meta_2',
         created_at: new Date(Date.now() - 1800000).toISOString()
@@ -97,38 +143,38 @@ export const InboxPage: React.FC = () => {
       created_at: new Date().toISOString()
     };
     
-    // Simular envío de mensaje local
     setMessages([...messages, newMsg]);
     setInputText('');
   };
 
-  // Disparar llamada a IA bajo demanda
+  // Disparar llamada a IA real o simular
   const handleRequestAIHelp = async () => {
     if (!activeChatId) return;
     setLoadingAI(true);
     setAiAnalysis(null);
 
-    // Simulador local con delay para simular DeepSeek API
-    setTimeout(() => {
-      setAiAnalysis({
-        summary: "El prospecto muestra alto interés en el curso pero tiene una objeción de presupuesto. Prefiere pagar financiado.",
-        detected_objections: ["Precio / Presupuesto"],
-        suggested_stage: "NEGOCIACION"
-      });
-      setLoadingAI(false);
-    }, 1500);
-
-    /* Código de integración real:
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/chats/${activeChatId}/analyze`, { method: 'POST' });
-      const data = await res.json();
-      setAiAnalysis(data);
+      const res = await fetch(`${API_URL}/chats/${activeChatId}/analyze`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setAiAnalysis(data);
+      } else {
+        throw new Error("API Error");
+      }
     } catch (e) {
-      console.error(e);
+      console.warn("Falla de API de IA, simulando análisis:", e);
+      // Fallback
+      setTimeout(() => {
+        setAiAnalysis({
+          summary: "El prospecto muestra alto interés en el curso pero tiene una objeción de presupuesto. Prefiere pagar financiado.",
+          detected_objections: ["Precio / Presupuesto"],
+          suggested_stage: "NEGOCIACION"
+        });
+        setLoadingAI(false);
+      }, 1500);
     } finally {
       setLoadingAI(false);
     }
-    */
   };
 
   const handleApplyAIStage = () => {
@@ -142,7 +188,7 @@ export const InboxPage: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-white text-slate-800">
-      {/* 1. Columna Izquierda: Lista de Chats */}
+      {/* Column 1: Chat List */}
       <div className="w-80 border-r border-slate-200 flex flex-col bg-slate-50">
         <div className="p-4 border-b border-slate-200 bg-white">
           <h1 className="text-lg font-semibold tracking-tight text-slate-900 flex items-center gap-2">
@@ -160,7 +206,7 @@ export const InboxPage: React.FC = () => {
               }`}
             >
               <div className="flex justify-between items-center">
-                <span className="font-medium text-slate-900">{chat.first_name} {chat.last_name}</span>
+                <span className="font-medium text-slate-900">{chat.first_name || 'Cliente'} {chat.last_name || ''}</span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
                   {chat.status}
                 </span>
@@ -171,19 +217,17 @@ export const InboxPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Columna Central: Ventana de Chat */}
+      {/* Column 2: Chat Window */}
       <div className="flex-1 flex flex-col h-full bg-white">
         {activeChat ? (
           <>
-            {/* Header de Chat */}
             <div className="p-4 border-b border-slate-200 flex justify-between items-center">
               <div>
-                <h2 className="font-semibold text-slate-950">{activeChat.first_name} {activeChat.last_name}</h2>
+                <h2 className="font-semibold text-slate-950">{activeChat.first_name || 'Cliente'} {activeChat.last_name || ''}</h2>
                 <p className="text-xs text-slate-500">{activeChat.phone_number}</p>
               </div>
             </div>
 
-            {/* Burbujas de Mensajes */}
             <div className="flex-1 p-6 overflow-y-auto bg-slate-50/50 flex flex-col gap-4">
               {messages.map(msg => (
                 <div
@@ -206,7 +250,6 @@ export const InboxPage: React.FC = () => {
               ))}
             </div>
 
-            {/* Input de Mensajes */}
             <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-200 flex gap-2">
               <input
                 type="text"
@@ -231,7 +274,7 @@ export const InboxPage: React.FC = () => {
         )}
       </div>
 
-      {/* 3. Columna Derecha: Panel de Asistente de IA (Bajo Demanda) */}
+      {/* Column 3: AI Sidebar */}
       <div className="w-80 border-l border-slate-200 flex flex-col bg-white">
         <div className="p-4 border-b border-slate-200">
           <h3 className="font-semibold text-slate-900 flex items-center gap-1.5 text-sm">
@@ -241,7 +284,6 @@ export const InboxPage: React.FC = () => {
         
         {activeChat ? (
           <div className="p-4 flex-1 flex flex-col gap-4 overflow-y-auto">
-            {/* Info de Negocio */}
             <div>
               <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase">Filtro de Nicho</span>
               <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md text-xs mt-1 text-slate-700">
@@ -249,7 +291,6 @@ export const InboxPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Botón de Ayuda IA */}
             <div className="border-t border-slate-100 pt-4">
               <button
                 onClick={handleRequestAIHelp}
@@ -261,7 +302,6 @@ export const InboxPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Resultado del Análisis de IA */}
             {aiAnalysis && (
               <div className="p-3.5 border border-slate-200 rounded-lg flex flex-col gap-3 bg-slate-50/50 animate-fade-in">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">

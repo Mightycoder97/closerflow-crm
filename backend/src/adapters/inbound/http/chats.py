@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from sqlalchemy.orm import Session
 from src.ports.outbound.llm_port import LLMPort
 from src.config.dependencies import get_llm_adapter, get_db_session
@@ -14,13 +14,77 @@ class AIAnalysisResponse(BaseModel):
     detected_objections: List[str]
     suggested_stage: str
 
+class ContactResponse(BaseModel):
+    id: UUID
+    business_profile_id: UUID
+    first_name: Optional[str]
+    last_name: Optional[str]
+    phone_number: str
+    email: Optional[str]
+    status: str
+    created_at: str
+    updated_at: str
+
+    class Config:
+        from_attributes = True
+
+class MessageResponse(BaseModel):
+    id: UUID
+    contact_id: UUID
+    direction: str
+    content: str
+    message_type: str
+    meta_message_id: Optional[str]
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+# --- NUEVO: Obtener la lista de todos los contactos (leads) ---
+@router.get("", response_model=List[ContactResponse])
+async def list_chats(db: Session = Depends(get_db_session)):
+    contacts = db.query(ContactDBModel).order_index = db.query(ContactDBModel).order_by(ContactDBModel.updated_at.desc()).all()
+    
+    result = []
+    for c in contacts:
+        result.append(ContactResponse(
+            id=c.id,
+            business_profile_id=c.business_profile_id,
+            first_name=c.first_name,
+            last_name=c.last_name,
+            phone_number=c.phone_number,
+            email=c.email,
+            status=c.status,
+            created_at=c.created_at.isoformat(),
+            updated_at=c.updated_at.isoformat()
+        ))
+    return result
+
+# --- NUEVO: Obtener el historial de mensajes de un contacto ---
+@router.get("/{contact_id}/messages", response_model=List[MessageResponse])
+async def get_chat_messages(contact_id: UUID, db: Session = Depends(get_db_session)):
+    messages = db.query(MessageDBModel).filter_by(contact_id=contact_id).order_by(MessageDBModel.created_at.asc()).all()
+    
+    result = []
+    for m in messages:
+        result.append(MessageResponse(
+            id=m.id,
+            contact_id=m.contact_id,
+            direction=m.direction,
+            content=m.content,
+            message_type=m.message_type,
+            meta_message_id=m.meta_message_id,
+            created_at=m.created_at.isoformat()
+        ))
+    return result
+
+# --- Analizar chat bajo demanda ---
 @router.post("/{contact_id}/analyze", response_model=AIAnalysisResponse)
 async def request_ai_assistance(
     contact_id: UUID,
     db: Session = Depends(get_db_session),
     llm_adapter: LLMPort = Depends(get_llm_adapter)
 ):
-    # 1. Obtener el contacto y sus reglas de negocio
     contact = db.query(ContactDBModel).filter_by(id=contact_id).first()
     if not contact:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto no encontrado")
@@ -32,18 +96,15 @@ async def request_ai_assistance(
             detail="El contacto no tiene un perfil de negocio asociado"
         )
         
-    # 2. Obtener los últimos 30 mensajes del chat formateados en texto plano
     messages = db.query(MessageDBModel).filter_by(contact_id=contact_id).order_by(MessageDBModel.created_at.desc()).limit(30).all()
     if not messages:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay mensajes suficientes para analizar")
 
-    # Revertir orden para que sea cronológico
     formatted_transcript = ""
     for msg in reversed(messages):
         sender = "Cliente" if msg.direction == "INBOUND" else "Agente"
         formatted_transcript += f"[{msg.created_at.strftime('%H:%M')}] {sender}: {msg.content}\n"
 
-    # 3. Llamada a DeepSeek
     try:
         analysis = llm_adapter.analyze_chat_history(
             chat_transcript=formatted_transcript,
@@ -56,8 +117,6 @@ async def request_ai_assistance(
             detail=f"Error al conectar con DeepSeek: {str(e)}"
         )
 
-    # 4. Guardar el análisis
-    # Encontrar la etapa sugerida en el embudo
     stage = db.query(PipelineStageDBModel).filter_by(
         business_profile_id=business_profile.id,
         name=analysis.suggested_stage

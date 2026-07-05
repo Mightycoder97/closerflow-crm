@@ -10,16 +10,8 @@ from src.domain.entities.contact import ContactStatus
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "meta_webhook_queue"
 
-async def process_incoming_meta_webhook(event_data: dict, db: Session):
-    """
-    Simulación de procesamiento administrativo de webhook:
-    1. Descarga el mensaje o lead de Meta
-    2. Lo guarda en PostgreSQL
-    3. Asigna de forma Round Robin a un agente libre.
-    """
+async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_client: aioredis.Redis):
     try:
-        # Extraer datos de WhatsApp del Payload
-        # Meta envía eventos en el formato: entry -> changes -> value -> messages
         entry = event_data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
@@ -36,11 +28,9 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session):
             content = meta_msg.get("text", {}).get("body", "")
             meta_msg_id = meta_msg.get("id")
             
-            # Buscar el primer perfil de negocio para simular la asignación
-            # En producción se obtiene del número de WhatsApp emisor
             business_profile_id = db.execute("SELECT id FROM business_profiles LIMIT 1").scalar()
             if not business_profile_id:
-                print("No hay ningún business_profile registrado. Crea uno en la base de datos.")
+                print("Worker Error: No hay ningún business_profile registrado en Supabase.")
                 return
 
             # 1. Buscar o Crear el Contacto
@@ -72,15 +62,34 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session):
                     meta_message_id=meta_msg_id
                 )
                 db.add(db_msg)
+                
+                # Actualizar el timestamp de modificación del contacto para ordenamiento
+                contact.updated_at = db_msg.created_at
+                
                 db.commit()
+                db.refresh(db_msg)
                 print(f"Mensaje guardado en worker: {content}")
                 
-            # 3. Lógica básica de asignación Round Robin
-            # Asigna a cualquier agente activo
+                # --- NUEVO: Publicar el mensaje en Redis Pub/Sub para que FastAPI lo envíe al Frontend ---
+                event_payload = {
+                    "type": "NEW_MESSAGE",
+                    "payload": {
+                        "id": str(db_msg.id),
+                        "contact_id": str(contact.id),
+                        "direction": db_msg.direction,
+                        "content": db_msg.content,
+                        "message_type": db_msg.message_type,
+                        "meta_message_id": db_msg.meta_message_id,
+                        "created_at": db_msg.created_at.isoformat()
+                    }
+                }
+                await redis_client.publish("ws_broadcast", json.dumps(event_payload))
+                print(f"Mensaje publicado a ws_broadcast para tiempo real.")
+                
+            # 3. Asignación Round Robin (Simulada para test de pauta)
             agent = db.query(UserDBModel).filter_by(role="agent", status="active").first()
             if agent:
-                # Comprobar si ya tiene un Deal asignado, si no, crear o asignar
-                print(f"Lead {phone} asignado automáticamente al agente: {agent.email}")
+                print(f"Lead {phone} asignado al agente: {agent.email}")
                 
     except Exception as e:
         print(f"Error procesando webhook en worker: {e}")
@@ -91,17 +100,15 @@ async def start_worker():
     
     while True:
         try:
-            # BLPOP espera de forma bloqueante y eficiente hasta que haya un webhook en la cola
             result = await redis_client.blpop(QUEUE_NAME, timeout=5)
             if result:
                 _, event_data_str = result
                 event_data = json.loads(event_data_str)
-                print("Evento recuperado de Redis. Procesando tareas administrativas...")
+                print("Evento recuperado de Redis.")
                 
-                # Crear sesión de base de datos para este hilo
                 db = SessionLocal()
                 try:
-                    await process_incoming_meta_webhook(event_data, db)
+                    await process_incoming_meta_webhook(event_data, db, redis_client)
                 finally:
                     db.close()
                     

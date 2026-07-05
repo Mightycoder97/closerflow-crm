@@ -35,7 +35,7 @@ export const InboxPage: React.FC = () => {
   const loadDummyChats = () => {
     const dummyChats: Contact[] = [
       {
-        id: '1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p',
+        id: '11111111-1111-1111-1111-111111111111',
         business_profile_id: 'b1',
         first_name: 'Mateo',
         last_name: 'Gomez',
@@ -46,7 +46,7 @@ export const InboxPage: React.FC = () => {
         updated_at: new Date().toISOString(),
       },
       {
-        id: '2a3b4c5d-6e7f-8g9h-0i1j-2k3l4m5n6o7p',
+        id: '22222222-2222-2222-2222-222222222222',
         business_profile_id: 'b1',
         first_name: 'Sofía',
         last_name: 'Díaz',

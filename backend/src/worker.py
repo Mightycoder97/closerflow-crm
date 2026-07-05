@@ -3,6 +3,7 @@ import json
 import os
 import redis.asyncio as aioredis
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from src.adapters.outbound.database.postgres import SessionLocal
 from src.adapters.outbound.database.models import ContactDBModel, MessageDBModel, UserDBModel
 from src.domain.entities.contact import ContactStatus
@@ -28,7 +29,7 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_cli
             content = meta_msg.get("text", {}).get("body", "")
             meta_msg_id = meta_msg.get("id")
             
-            business_profile_id = db.execute("SELECT id FROM business_profiles LIMIT 1").scalar()
+            business_profile_id = db.execute(text("SELECT id FROM business_profiles LIMIT 1")).scalar()
             if not business_profile_id:
                 print("Worker Error: No hay ningún business_profile registrado en Supabase.")
                 return

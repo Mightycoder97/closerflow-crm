@@ -43,7 +43,7 @@ class MessageResponse(BaseModel):
 # --- NUEVO: Obtener la lista de todos los contactos (leads) ---
 @router.get("", response_model=List[ContactResponse])
 async def list_chats(db: Session = Depends(get_db_session)):
-    contacts = db.query(ContactDBModel).order_index = db.query(ContactDBModel).order_by(ContactDBModel.updated_at.desc()).all()
+    contacts = db.query(ContactDBModel).order_by(ContactDBModel.updated_at.desc()).all()
     
     result = []
     for c in contacts:

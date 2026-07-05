@@ -7,8 +7,10 @@ from src.config.dependencies import get_event_queue_adapter
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "mi_token_secreto_de_validacion_123")
-META_APP_SECRET = os.getenv("META_APP_SECRET", "mi_app_secret_de_facebook")
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "mi_token_secreto_de_validacion_123").strip().replace('"', '').replace("'", "")
+raw_secret = os.getenv("META_APP_SECRET", "mi_app_secret_de_facebook")
+META_APP_SECRET = raw_secret.strip().replace('"', '').replace("'", "")
+BYPASS_SIGNATURE_VERIFICATION = os.getenv("BYPASS_SIGNATURE_VERIFICATION", "false").lower() == "true"
 
 @router.get("/meta")
 async def verify_meta_webhook(
@@ -32,8 +34,8 @@ async def receive_meta_webhook(
 ):
     body_bytes = await request.body()
     
-    # Si META_APP_SECRET es de prueba y no viene firma, podemos saltarlo en testing local
-    if META_APP_SECRET != "mi_app_secret_de_facebook":
+    # Si META_APP_SECRET es de prueba o está activo el bypass, saltamos la validación de firma
+    if META_APP_SECRET != "mi_app_secret_de_facebook" and not BYPASS_SIGNATURE_VERIFICATION:
         if not x_hub_signature_256:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

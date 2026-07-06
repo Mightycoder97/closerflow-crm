@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from urllib.parse import urlparse
 import redis.asyncio as aioredis
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -12,11 +13,29 @@ import redis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "meta_webhook_queue"
+
+def mask_redis_url(url: str) -> str:
+    """Enmascara credenciales en la URL de Redis para logs seguros."""
+    try:
+        parsed = urlparse(url)
+        if parsed.password:
+            masked = url.replace(f":{parsed.password}@", ":***@")
+            return masked
+        return url
+    except Exception:
+        return "redis://***"
+
 async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_client: aioredis.Redis):
     try:
         entry = event_data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
+        
+        # Extraer phone_number_id de los metadatos del webhook
+        metadata = value.get("metadata", {})
+        phone_number_id = metadata.get("phone_number_id")
+        if phone_number_id:
+            print(f"Webhook recibido para phone_number_id: {phone_number_id}")
         
         messages_list = value.get("messages", [])
         contacts_list = value.get("contacts", [])
@@ -97,8 +116,10 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_cli
         print(f"Error procesando webhook en worker: {e}")
 
 async def start_worker():
-    print(f"Escuchando cola de Redis en {REDIS_URL}...")
+    print(f"Escuchando cola de Redis en {mask_redis_url(REDIS_URL)}...")
     redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+    backoff_seconds = 2
+    max_backoff_seconds = 60
     while True:
         try:
             result = await redis_client.blpop(QUEUE_NAME, timeout=5)
@@ -112,12 +133,16 @@ async def start_worker():
                     await process_incoming_meta_webhook(event_data, db, redis_client)
                 finally:
                     db.close()
+                
+                # Reset backoff on success
+                backoff_seconds = 2
         except (asyncio.TimeoutError, redis.exceptions.TimeoutError):
             # Ignorar el timeout normal cuando la cola está vacía para no llenar logs
             continue
         except Exception as e:
-            print(f"Error de conexión o lectura en worker: {e}")
-            await asyncio.sleep(2)
+            print(f"Error de conexión o lectura en worker: {e}. Reintentando en {backoff_seconds}s...")
+            await asyncio.sleep(backoff_seconds)
+            backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
 
 if __name__ == "__main__":
     asyncio.run(start_worker())

@@ -1,6 +1,7 @@
 # Ignorar archivos locales y configuraciones
 .DS_Store
 *.log
+.env
 
 # Backend
 backend/.env

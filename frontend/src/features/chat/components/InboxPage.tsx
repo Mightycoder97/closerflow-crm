@@ -11,6 +11,7 @@ export const InboxPage: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
   const [loadingAI, setLoadingAI] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   // 1. Obtener los chats reales desde el backend al cargar la página
   const fetchChats = async () => {
@@ -129,22 +130,49 @@ export const InboxPage: React.FC = () => {
     setMessages(dummyMessages);
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  // 3. Enviar mensaje al backend (WhatsApp) con actualización optimista
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !activeChatId) return;
+    if (!inputText.trim() || !activeChatId || isSending) return;
 
-    const newMsg: Message = {
-      id: Math.random().toString(),
+    const messageContent = inputText.trim();
+    const previousMessages = [...messages];
+
+    // Optimistic update: agregar el mensaje localmente de inmediato
+    const optimisticMsg: Message = {
+      id: 'temp_' + Math.random().toString(36).slice(2),
       contact_id: activeChatId,
       direction: 'OUTBOUND',
-      content: inputText,
+      content: messageContent,
       message_type: 'TEXT',
-      meta_message_id: 'temp_meta_' + Math.random(),
+      meta_message_id: 'temp_meta_' + Math.random().toString(36).slice(2),
       created_at: new Date().toISOString()
     };
-    
-    setMessages([...messages, newMsg]);
+
+    setMessages([...messages, optimisticMsg]);
     setInputText('');
+    setIsSending(true);
+
+    try {
+      const res = await fetch(`${API_URL}/chats/${activeChatId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: messageContent }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Error al enviar mensaje: ${res.status} ${res.statusText}`);
+      }
+
+      // Si el backend devuelve el mensaje creado, podríamos reemplazar el optimista
+      // con el real, pero por ahora lo dejamos como está.
+    } catch (error) {
+      console.error('Error enviando mensaje a WhatsApp:', error);
+      // Revertir la actualización optimista
+      setMessages(previousMessages);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   // Disparar llamada a IA real o simular
@@ -253,16 +281,18 @@ export const InboxPage: React.FC = () => {
             <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-200 flex gap-2">
               <input
                 type="text"
-                placeholder="Escribe un mensaje de WhatsApp..."
+                placeholder={isSending ? 'Enviando...' : 'Escribe un mensaje de WhatsApp...'}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                className="flex-1 px-4 py-2 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-400 text-sm"
+                disabled={isSending}
+                className="flex-1 px-4 py-2 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-400 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <button
                 type="submit"
-                className="p-2 bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors"
+                disabled={isSending || !inputText.trim()}
+                className="p-2 bg-slate-900 text-white rounded-md hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Send className="w-4 h-4" />
+                <Send className={`w-4 h-4 ${isSending ? 'animate-pulse' : ''}`} />
               </button>
             </form>
           </>

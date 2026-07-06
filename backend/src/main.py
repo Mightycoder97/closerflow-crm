@@ -2,6 +2,7 @@ import os
 import asyncio
 import json
 import redis.asyncio as aioredis
+from urllib.parse import urlparse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,6 +11,17 @@ from typing import List
 
 # URL de Redis desde variables de entorno
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+def mask_redis_url(url: str) -> str:
+    """Enmascara credenciales en la URL de Redis para logs seguros."""
+    try:
+        parsed = urlparse(url)
+        if parsed.password:
+            masked = url.replace(f":{parsed.password}@", ":***@")
+            return masked
+        return url
+    except Exception:
+        return "redis://***"
 
 # --- websocket connection manager ---
 class ConnectionManager:
@@ -35,7 +47,7 @@ manager = ConnectionManager()
 
 # --- Tarea asíncrona para escuchar Pub/Sub de Redis y retransmitir a WebSockets ---
 async def redis_websocket_broadcaster():
-    print(f"WS Broadcaster: Conectando a Redis Pub/Sub en {REDIS_URL}...")
+    print(f"WS Broadcaster: Conectando a Redis Pub/Sub en {mask_redis_url(REDIS_URL)}...")
     redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
     pubsub = redis_client.pubsub()
     await pubsub.subscribe("ws_broadcast")
@@ -89,6 +101,10 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def read_root():
     return {"status": "running", "app": "CloserFlow AI"}
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check():
+    return {"status": "ok"}

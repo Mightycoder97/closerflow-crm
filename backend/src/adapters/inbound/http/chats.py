@@ -1,13 +1,22 @@
+import os
+import json
+import logging
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from src.ports.outbound.llm_port import LLMPort
-from src.config.dependencies import get_llm_adapter, get_db_session
+from src.ports.outbound.whatsapp_port import WhatsAppPort
+from src.config.dependencies import get_llm_adapter, get_db_session, get_whatsapp_adapter
 from src.adapters.outbound.database.models import ContactDBModel, MessageDBModel, AIAnalysisDBModel, PipelineStageDBModel
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/chats", tags=["Chats & IA"])
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 class AIAnalysisResponse(BaseModel):
     summary: str
@@ -39,6 +48,9 @@ class MessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class SendMessageRequest(BaseModel):
+    content: str
 
 # --- NUEVO: Obtener la lista de todos los contactos (leads) ---
 @router.get("", response_model=List[ContactResponse])
@@ -77,6 +89,89 @@ async def get_chat_messages(contact_id: UUID, db: Session = Depends(get_db_sessi
             created_at=m.created_at.isoformat()
         ))
     return result
+
+# --- NUEVO: Enviar mensaje de texto a un contacto vía WhatsApp ---
+@router.post("/{contact_id}/send", response_model=MessageResponse)
+async def send_message(
+    contact_id: UUID,
+    body: SendMessageRequest,
+    db: Session = Depends(get_db_session),
+    whatsapp_adapter: WhatsAppPort = Depends(get_whatsapp_adapter),
+):
+    # 1. Buscar el contacto por ID para obtener el phone_number
+    contact = db.query(ContactDBModel).filter_by(id=contact_id).first()
+    if not contact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contacto no encontrado"
+        )
+
+    # 2. Enviar el mensaje vía WhatsApp Cloud API
+    try:
+        wa_response = await whatsapp_adapter.send_text_message(
+            to_phone=contact.phone_number,
+            message=body.content,
+        )
+    except Exception as e:
+        logger.error(f"Error al enviar mensaje de WhatsApp a {contact.phone_number}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Error al enviar mensaje vía WhatsApp: {str(e)}"
+        )
+
+    # 3. Guardar el mensaje en la base de datos como OUTBOUND
+    meta_msg_id = None
+    if wa_response and "messages" in wa_response:
+        messages_list = wa_response["messages"]
+        if messages_list:
+            meta_msg_id = messages_list[0].get("id")
+
+    db_msg = MessageDBModel(
+        contact_id=contact.id,
+        direction="OUTBOUND",
+        content=body.content,
+        message_type="TEXT",
+        meta_message_id=meta_msg_id,
+    )
+    db.add(db_msg)
+
+    # Actualizar el timestamp de modificación del contacto para ordenamiento
+    contact.updated_at = db_msg.created_at
+
+    db.commit()
+    db.refresh(db_msg)
+
+    # 4. Publicar evento OUTBOUND_MESSAGE a Redis Pub/Sub para tiempo real
+    try:
+        redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+        event_payload = {
+            "type": "OUTBOUND_MESSAGE",
+            "payload": {
+                "id": str(db_msg.id),
+                "contact_id": str(contact.id),
+                "direction": db_msg.direction,
+                "content": db_msg.content,
+                "message_type": db_msg.message_type,
+                "meta_message_id": db_msg.meta_message_id,
+                "created_at": db_msg.created_at.isoformat(),
+            }
+        }
+        await redis_client.publish("ws_broadcast", json.dumps(event_payload))
+        await redis_client.close()
+        logger.info(f"Mensaje OUTBOUND publicado a ws_broadcast para contacto {contact_id}")
+    except Exception as e:
+        logger.warning(f"No se pudo publicar evento a Redis Pub/Sub: {e}")
+
+    # 5. Retornar el mensaje guardado
+    return MessageResponse(
+        id=db_msg.id,
+        contact_id=db_msg.contact_id,
+        direction=db_msg.direction,
+        content=db_msg.content,
+        message_type=db_msg.message_type,
+        meta_message_id=db_msg.meta_message_id,
+        created_at=db_msg.created_at.isoformat(),
+    )
 
 # --- Analizar chat bajo demanda ---
 @router.post("/{contact_id}/analyze", response_model=AIAnalysisResponse)

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime, timezone
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
@@ -136,7 +137,7 @@ async def send_message(
     db.add(db_msg)
 
     # Actualizar el timestamp de modificación del contacto para ordenamiento
-    contact.updated_at = db_msg.created_at
+    contact.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(db_msg)

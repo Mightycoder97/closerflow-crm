@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 import redis.asyncio as aioredis
 from sqlalchemy.orm import Session
@@ -85,7 +86,7 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_cli
                 db.add(db_msg)
                 
                 # Actualizar el timestamp de modificación del contacto para ordenamiento
-                contact.updated_at = db_msg.created_at
+                contact.updated_at = datetime.now(timezone.utc)
                 
                 db.commit()
                 db.refresh(db_msg)

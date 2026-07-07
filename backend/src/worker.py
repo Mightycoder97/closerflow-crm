@@ -7,8 +7,9 @@ import redis.asyncio as aioredis
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from src.adapters.outbound.database.postgres import SessionLocal
-from src.adapters.outbound.database.models import ContactDBModel, MessageDBModel, UserDBModel
+from src.adapters.outbound.database.models import ContactDBModel, MessageDBModel, UserDBModel, ChatbotRuleDBModel
 from src.domain.entities.contact import ContactStatus
+from src.config.dependencies import get_whatsapp_adapter
 
 import redis
 
@@ -107,6 +108,66 @@ async def process_incoming_meta_webhook(event_data: dict, db: Session, redis_cli
                 }
                 await redis_client.publish("ws_broadcast", json.dumps(event_payload))
                 print(f"Mensaje publicado a ws_broadcast para tiempo real.")
+
+                # --- NUEVO: Procesar reglas de Chatbot Auto-Response ---
+                active_rules = db.query(ChatbotRuleDBModel).filter_by(
+                    business_profile_id=business_profile_id,
+                    is_active=True
+                ).all()
+
+                # Buscar coincidencia (case-insensitive substring match)
+                matched_rule = None
+                content_lower = content.lower().strip()
+                for rule in active_rules:
+                    if rule.trigger_keyword.lower() in content_lower:
+                        matched_rule = rule
+                        break
+
+                if matched_rule:
+                    print(f"Chatbot Match: La palabra clave '{matched_rule.trigger_keyword}' coincide con el mensaje '{content}'")
+                    try:
+                        # Enviar auto-respuesta vía WhatsApp
+                        whatsapp_adapter = get_whatsapp_adapter()
+                        wa_response = await whatsapp_adapter.send_text_message(
+                            to_phone=phone,
+                            message=matched_rule.response_content,
+                        )
+                        
+                        meta_msg_id = None
+                        if wa_response and "messages" in wa_response:
+                            messages_list = wa_response["messages"]
+                            if messages_list:
+                                meta_msg_id = messages_list[0].get("id")
+
+                        # Guardar la respuesta automática en la base de datos
+                        db_reply = MessageDBModel(
+                            contact_id=contact.id,
+                            direction="OUTBOUND",
+                            content=matched_rule.response_content,
+                            message_type="TEXT",
+                            meta_message_id=meta_msg_id,
+                        )
+                        db.add(db_reply)
+                        db.commit()
+                        db.refresh(db_reply)
+                        print(f"Auto-respuesta guardada en base de datos: {matched_rule.response_content}")
+
+                        # Publicar evento OUTBOUND_MESSAGE a Redis Pub/Sub para actualizar el inbox en tiempo real
+                        event_payload_reply = {
+                            "type": "OUTBOUND_MESSAGE",
+                            "payload": {
+                                "id": str(db_reply.id),
+                                "contact_id": str(contact.id),
+                                "direction": db_reply.direction,
+                                "content": db_reply.content,
+                                "message_type": db_reply.message_type,
+                                "meta_message_id": db_reply.meta_message_id,
+                                "created_at": db_reply.created_at.isoformat()
+                            }
+                        }
+                        await redis_client.publish("ws_broadcast", json.dumps(event_payload_reply))
+                    except Exception as ex:
+                        print(f"Error procesando auto-respuesta del chatbot: {ex}")
                 
             # 3. Asignación Round Robin (Simulada para test de pauta)
             agent = db.query(UserDBModel).filter_by(role="agent", status="active").first()

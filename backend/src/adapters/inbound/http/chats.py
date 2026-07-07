@@ -233,3 +233,81 @@ async def request_ai_assistance(
         detected_objections=analysis.detected_objections,
         suggested_stage=analysis.suggested_stage
     )
+
+class BroadcastRequest(BaseModel):
+    contact_ids: List[UUID]
+    content: str
+
+class BroadcastResponse(BaseModel):
+    success_count: int
+    failed_contacts: List[UUID]
+
+@router.post("/broadcast", response_model=BroadcastResponse)
+async def send_broadcast(
+    body: BroadcastRequest,
+    db: Session = Depends(get_db_session),
+    whatsapp_adapter: WhatsAppPort = Depends(get_whatsapp_adapter),
+):
+    success_count = 0
+    failed_contacts = []
+
+    for contact_id in body.contact_ids:
+        contact = db.query(ContactDBModel).filter_by(id=contact_id).first()
+        if not contact:
+            failed_contacts.append(contact_id)
+            continue
+
+        try:
+            # Enviar el mensaje vía WhatsApp Cloud API
+            wa_response = await whatsapp_adapter.send_text_message(
+                to_phone=contact.phone_number,
+                message=body.content,
+            )
+            
+            meta_msg_id = None
+            if wa_response and "messages" in wa_response:
+                messages_list = wa_response["messages"]
+                if messages_list:
+                    meta_msg_id = messages_list[0].get("id")
+
+            # Guardar en base de datos
+            db_msg = MessageDBModel(
+                contact_id=contact.id,
+                direction="OUTBOUND",
+                content=body.content,
+                message_type="TEXT",
+                meta_message_id=meta_msg_id,
+            )
+            db.add(db_msg)
+            contact.updated_at = datetime.now(timezone.utc)
+            db.commit()
+
+            # Publicar evento OUTBOUND_MESSAGE a Redis Pub/Sub para actualizar frontend
+            try:
+                redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+                event_payload = {
+                    "type": "OUTBOUND_MESSAGE",
+                    "payload": {
+                        "id": str(db_msg.id),
+                        "contact_id": str(contact.id),
+                        "direction": db_msg.direction,
+                        "content": db_msg.content,
+                        "message_type": db_msg.message_type,
+                        "meta_message_id": db_msg.meta_message_id,
+                        "created_at": db_msg.created_at.isoformat(),
+                    }
+                }
+                await redis_client.publish("ws_broadcast", json.dumps(event_payload))
+                await redis_client.close()
+            except Exception as e:
+                logger.warning(f"No se pudo publicar evento broadcast a Redis: {e}")
+
+            success_count += 1
+        except Exception as e:
+            logger.error(f"Error al enviar broadcast a {contact.phone_number}: {e}")
+            failed_contacts.append(contact_id)
+
+    return BroadcastResponse(
+        success_count=success_count,
+        failed_contacts=failed_contacts
+    )

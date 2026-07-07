@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from src.adapters.inbound.http import webhooks, chats
+from src.adapters.inbound.http import webhooks, chats, pipeline, chatbot
 from typing import List
 
 # URL de Redis desde variables de entorno
@@ -90,6 +90,8 @@ app.add_middleware(
 # Rutas
 app.include_router(webhooks.router, prefix="/api/v1")
 app.include_router(chats.router, prefix="/api/v1")
+app.include_router(pipeline.router, prefix="/api/v1")
+app.include_router(chatbot.router, prefix="/api/v1")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

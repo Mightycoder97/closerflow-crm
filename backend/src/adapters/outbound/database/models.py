@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Numeric, Text, ForeignKey, TIMESTAMP, JSON
+from sqlalchemy import Column, String, Integer, Numeric, Text, ForeignKey, TIMESTAMP, JSON, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -114,3 +114,13 @@ class AIAnalysisDBModel(Base):
     detected_objections = Column(JSON, default=[], nullable=False)
     suggested_stage_id = Column(UUID(as_uuid=True), ForeignKey("pipeline_stages.id"))
     created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+class ChatbotRuleDBModel(Base):
+    __tablename__ = "chatbot_rules"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    business_profile_id = Column(UUID(as_uuid=True), ForeignKey("business_profiles.id", ondelete="CASCADE"), nullable=False)
+    trigger_keyword = Column(String(100), nullable=False)
+    response_content = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)

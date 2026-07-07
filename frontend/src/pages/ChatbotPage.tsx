@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useChatStore } from '../store/useChatStore';
-import { Bot, Plus, Trash2, Power, HelpCircle, X, Sparkles, MessageSquare } from 'lucide-react';
+import { Bot, Plus, Trash2, Power, X, Sparkles, MessageSquare } from 'lucide-react';
 
 export const ChatbotPage: React.FC = () => {
   const { chatbotRules, fetchChatbotRules, createChatbotRule, toggleChatbotRule, deleteChatbotRule } = useChatStore();

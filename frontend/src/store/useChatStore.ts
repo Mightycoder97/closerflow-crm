@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Contact, Message, PipelineStage, Deal, ChatbotRule } from '../types';
+import { Contact, Message, PipelineStage, ChatbotRule } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
